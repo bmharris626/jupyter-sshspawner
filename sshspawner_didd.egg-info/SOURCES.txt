@@ -1,0 +1,5 @@
+setup.py
+sshspawner_didd.egg-info/PKG-INFO
+sshspawner_didd.egg-info/SOURCES.txt
+sshspawner_didd.egg-info/dependency_links.txt
+sshspawner_didd.egg-info/top_level.txt
