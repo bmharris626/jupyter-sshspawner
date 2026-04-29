@@ -170,6 +170,23 @@ class SSHSpawnerTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("--port=9999", captured["command"])
         self.assertNotIn("--ip=127.0.0.1", captured["command"])
 
+    async def test_ssh_known_hosts_policy(self):
+        spawner = self._new_spawner()
+
+        spawner.strict_host_key_checking = True
+        spawner.allow_loopback_no_host_key_checking = True
+        spawner.ssh_known_hosts = ""
+        self.assertEqual(spawner._ssh_connect_kwargs("localhost"), {"known_hosts": None})
+        self.assertEqual(spawner._ssh_connect_kwargs("192.168.2.10"), {})
+
+        spawner.ssh_known_hosts = "~/.ssh/known_hosts"
+        kwargs = spawner._ssh_connect_kwargs("192.168.2.10")
+        self.assertIn("known_hosts", kwargs)
+        self.assertTrue(kwargs["known_hosts"].endswith("/.ssh/known_hosts"))
+
+        spawner.strict_host_key_checking = False
+        self.assertEqual(spawner._ssh_connect_kwargs("192.168.2.10"), {"known_hosts": None})
+
 
 if __name__ == "__main__":
     unittest.main()

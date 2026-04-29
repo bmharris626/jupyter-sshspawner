@@ -1,5 +1,7 @@
 import asyncio, asyncssh
 import os
+import socket
+import ipaddress
 from textwrap import dedent
 import warnings
 import random
@@ -56,6 +58,20 @@ class SSHSpawner(Spawner):
 
             `~` will be expanded to the user's home directory and `{username}`
             will be expanded to the user's username"""),
+            config=True)
+
+    strict_host_key_checking = Bool(True,
+            help="Verify SSH host keys against known_hosts data.",
+            config=True)
+
+    ssh_known_hosts = Unicode("",
+            help=("Optional known_hosts path. Empty uses asyncssh default "
+                  "known_hosts lookup."),
+            config=True)
+
+    allow_loopback_no_host_key_checking = Bool(True,
+            help=("If True, disable host key checking for loopback targets "
+                  "(localhost/127.0.0.1) even when strict_host_key_checking is enabled."),
             config=True)
 
     pid = Integer(0,
@@ -153,11 +169,21 @@ class SSHSpawner(Spawner):
                         local_resource_path
                     )
 
-                async with asyncssh.connect(self.remote_ip, username=username, password=password, known_hosts=None) as conn:
+                async with asyncssh.connect(
+                        self.remote_ip,
+                        username=username,
+                        password=password,
+                        **self._ssh_connect_kwargs(self.remote_ip),
+                ) as conn:
                     mkdir_cmd = "mkdir -p {path} 2>/dev/null".format(path=self.resource_path)
                     result = await conn.run(mkdir_cmd)
                 files = [os.path.join(local_resource_path, f) for f in os.listdir(local_resource_path)]
-                async with asyncssh.connect(self.remote_ip, username=username, password=password, known_hosts=None) as conn:
+                async with asyncssh.connect(
+                        self.remote_ip,
+                        username=username,
+                        password=password,
+                        **self._ssh_connect_kwargs(self.remote_ip),
+                ) as conn:
                     await asyncssh.scp(files, (conn, self.resource_path))
 
         if self.hub_api_url != "":
@@ -230,7 +256,12 @@ class SSHSpawner(Spawner):
         If this fails for some reason return `None`."""
 
         username, password = await self.get_auth_credentials()
-        async with asyncssh.connect(self.remote_host, username=username, password=password, known_hosts=None) as conn:
+        async with asyncssh.connect(
+                self.remote_host,
+                username=username,
+                password=password,
+                **self._ssh_connect_kwargs(self.remote_host),
+        ) as conn:
             result = await conn.run(self.remote_port_command)
         stdout = result.stdout
         stderr = result.stderr
@@ -294,7 +325,12 @@ class SSHSpawner(Spawner):
             with open(run_script, "r") as f:
                 self.log.debug(run_script + " was written as:\n" + f.read())
 
-        async with asyncssh.connect(self.remote_ip, username=username, password=password, known_hosts=None) as conn:
+        async with asyncssh.connect(
+                self.remote_ip,
+                username=username,
+                password=password,
+                **self._ssh_connect_kwargs(self.remote_ip),
+        ) as conn:
             result = await conn.run("bash -s", stdin=run_script)
         stdout = result.stdout
         stderr = result.stderr
@@ -318,7 +354,12 @@ class SSHSpawner(Spawner):
         username, password = await self.get_auth_credentials()
         command = "kill -s %s %d < /dev/null"  % (sig, self.pid)
 
-        async with asyncssh.connect(self.remote_ip, username=username, password=password, known_hosts=None) as conn:
+        async with asyncssh.connect(
+                self.remote_ip,
+                username=username,
+                password=password,
+                **self._ssh_connect_kwargs(self.remote_ip),
+        ) as conn:
             result = await conn.run(command)
         stdout = result.stdout
         stderr = result.stderr
@@ -350,3 +391,34 @@ class SSHSpawner(Spawner):
             return
         with open(self.local_logfile, "w") as fout:
             fout.write(content)
+
+    def _ssh_connect_kwargs(self, host):
+        if not self.strict_host_key_checking:
+            return {"known_hosts": None}
+
+        if self.allow_loopback_no_host_key_checking and self._is_loopback_host(host):
+            return {"known_hosts": None}
+
+        if self.ssh_known_hosts:
+            return {"known_hosts": os.path.expanduser(self.ssh_known_hosts)}
+
+        return {}
+
+    def _is_loopback_host(self, host):
+        if not host:
+            return False
+
+        normalized = str(host).strip().lower()
+        if normalized in {"localhost", "127.0.0.1", "::1"}:
+            return True
+
+        try:
+            return ipaddress.ip_address(normalized).is_loopback
+        except ValueError:
+            pass
+
+        local_names = {
+            socket.gethostname().lower(),
+            socket.getfqdn().lower(),
+        }
+        return normalized in local_names
