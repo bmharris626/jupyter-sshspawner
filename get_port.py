@@ -1,13 +1,15 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
-import socket
+import sys
+from pathlib import Path
 
-def get_free_port():
-    s = socket.socket()
-    s.bind(('', 0))
-    ip, port = s.getsockname()
-    s.close()
-    return ip, port
 
-ip, port = get_free_port()
-print(f"{ip} {port}")
+_SRC_PATH = Path(__file__).resolve().parent / "src"
+if str(_SRC_PATH) not in sys.path:
+    sys.path.insert(0, str(_SRC_PATH))
+
+from sshspawner.get_port import main
+
+
+if __name__ == "__main__":
+    main()

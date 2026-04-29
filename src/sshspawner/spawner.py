@@ -11,6 +11,7 @@ import shlex
 from traitlets import Bool, Unicode, Integer, List, observe, default
 from jupyterhub.spawner import Spawner
 
+
 class SSHSpawner(Spawner):
 
     remote_hosts = List(trait=Unicode(),
@@ -31,12 +32,16 @@ class SSHSpawner(Spawner):
             help="Actual SSH command",
             config=True)
 
-    path = Unicode("/jolts/apps/jupyterhub/venv/bin:/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin",
+    path = Unicode("",
             help="Default PATH (should include jupyter and python)",
             config=True)
 
-    remote_port_command = Unicode("/usr/bin/bash -lc '/jolts/apps/jupyterhub/venv/bin/python /jolts/apps/jupyterhub/scripts/get_port.py'",
+    remote_port_command = Unicode("python3 -m sshspawner.get_port",
             help="Command to return unused port on remote host",
+            config=True)
+
+    local_logfile = Unicode("",
+            help="Optional local debug logfile path. Empty disables file logging.",
             config=True)
 
     hub_api_url = Unicode("",
@@ -107,39 +112,35 @@ class SSHSpawner(Spawner):
         username, password = await self.get_auth_credentials()
 
         self.remote_host = self.choose_remote_host()
-        
+
         self.remote_ip, port = await self.remote_random_port()
 
         if self.remote_ip is None or port is None or port == 0:
             return False
-        
-        # Store the port for the single-user server
+
         self.port = port
-        
+
         cmd = []
         cmd.extend(self.cmd)
         cmd.extend(self.get_args())
 
-        # Fix: Ensure the port argument is correctly set
         port_found = False
         for index, value in enumerate(cmd):
             if value.startswith('--port'):
                 cmd[index] = f'--port={port}'
                 port_found = True
                 break
-        
-        # If --port wasn't found, add it
+
         if not port_found:
             cmd.append(f'--port={port}')
 
-        # Set the IP to bind on (important for remote servers)
         ip_found = False
         for index, value in enumerate(cmd):
             if value.startswith('--ip'):
-                cmd[index] = '--ip=0.0.0.0'  # Listen on all interfaces for remote access
+                cmd[index] = '--ip=0.0.0.0'
                 ip_found = True
                 break
-        
+
         if not ip_found:
             cmd.append('--ip=0.0.0.0')
 
@@ -152,7 +153,6 @@ class SSHSpawner(Spawner):
                         local_resource_path
                     )
 
-                # create resource path dir in user's home on remote
                 async with asyncssh.connect(self.remote_ip, username=username, password=password, known_hosts=None) as conn:
                     mkdir_cmd = "mkdir -p {path} 2>/dev/null".format(path=self.resource_path)
                     result = await conn.run(mkdir_cmd)
@@ -170,8 +170,7 @@ class SSHSpawner(Spawner):
         remote_cmd = ' '.join(cmd)
         self.log.info(f"Starting server with command: {remote_cmd}")
 
-        with open('/jolts/apps/jupyterhub/logs/sshSpawner.log', 'w') as fout:
-            fout.write(remote_cmd)
+        self._write_local_log(remote_cmd)
 
         self.pid = await self.exec_notebook(remote_cmd)
 
@@ -189,11 +188,9 @@ class SSHSpawner(Spawner):
         code of the process if we have access to it, or 0 otherwise."""
 
         if not self.pid:
-                # no pid, not running
             self.clear_state()
             return 0
 
-        # send signal 0 to check if PID exists
         alive = await self.remote_signal(0)
         self.log.debug("Polling returned {}".format(alive))
 
@@ -228,12 +225,11 @@ class SSHSpawner(Spawner):
         self.log.debug("Remote IP was set to %s." % self.remote_ip)
 
     async def remote_random_port(self):
-        """Select unoccupied port on the remote host and return it. 
-        
+        """Select unoccupied port on the remote host and return it.
+
         If this fails for some reason return `None`."""
 
         username, password = await self.get_auth_credentials()
-        # this needs to be done against remote_host, first time we're calling up
         async with asyncssh.connect(self.remote_host, username=username, password=password, known_hosts=None) as conn:
             result = await conn.run(self.remote_port_command)
         stdout = result.stdout
@@ -245,7 +241,7 @@ class SSHSpawner(Spawner):
                 ip, port = stdout.strip().split()
                 port = int(port)
                 self.log.debug("ip={} port={}".format(ip, port))
-                return (ip.encode().decode(), port)  # Ensure it's a string
+                return (ip.encode().decode(), port)
             except (ValueError, IndexError) as e:
                 self.log.error(f"Failed to parse port output: {stdout}. Error: {e}")
                 return (None, None)
@@ -260,13 +256,11 @@ class SSHSpawner(Spawner):
 
         env = super(SSHSpawner, self).get_env()
 
-        # Ensure JUPYTERHUB_USER_SCOPES is set properly
         import json
         user_scopes = [f"access:servers!user={self.user.name}"]
         if self.user.admin:
             user_scopes.extend(["admin:users", "admin:servers"])
-        
-        # Set the scopes as a properly formatted JSON string
+
         env['JUPYTERHUB_USER_SCOPES'] = json.dumps(user_scopes)
 
         env['JUPYTERHUB_API_URL'] = self.hub_api_url if self.hub_api_url else self.hub.api_url
@@ -275,18 +269,15 @@ class SSHSpawner(Spawner):
         username, password = await self.get_auth_credentials()
         bash_script_str = "#!/bin/bash\n"
 
-        with open('/jolts/apps/jupyterhub/logs/sshSpawner.log', 'w') as fout:
-            for line in env:
-                fout.write(line + '\n')
-            fout.write('------------------\n')
-            for line in super().get_env():
-                fout.write(line + '\n')
+        if self.local_logfile:
+            lines = list(env)
+            lines.append("------------------")
+            lines.extend(super().get_env())
+            self._write_local_log("\n".join(lines))
 
-        # Properly escape environment variables for bash
         for key, value in env.items():
-            # Use printf to handle special characters properly
             bash_script_str += f'export {key}=$(printf %s {shlex.quote(value)})\n'
-        
+
         bash_script_str += 'unset XDG_RUNTIME_DIR\n'
 
         bash_script_str += 'touch .jupyter.log\n'
@@ -353,3 +344,9 @@ class SSHSpawner(Spawner):
             "certfile": cert,
             "cafile": ca,
         }
+
+    def _write_local_log(self, content):
+        if not self.local_logfile:
+            return
+        with open(self.local_logfile, "w") as fout:
+            fout.write(content)
