@@ -1,3 +1,5 @@
+"""Tests for the top-level get_port wrapper script."""
+
 import subprocess
 import sys
 import unittest
@@ -8,6 +10,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 class GetPortTests(unittest.TestCase):
+    """Validate wrapper output contract for get_port.py."""
+
     def test_wrapper_prints_ip_and_port(self):
         result = subprocess.run(
             [sys.executable, str(REPO_ROOT / "get_port.py")],

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+"""Top-level compatibility wrapper for ``sshspawner.get_port``."""
 
 import sys
 from pathlib import Path

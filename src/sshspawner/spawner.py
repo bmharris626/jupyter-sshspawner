@@ -1,20 +1,21 @@
-import asyncio, asyncssh
+"""JupyterHub spawner that launches single-user servers over SSH."""
+
+import asyncssh
 import os
 import socket
 import ipaddress
 from textwrap import dedent
-import warnings
 import random
-import pwd
 import shutil
 from tempfile import TemporaryDirectory
 import shlex
 
-from traitlets import Bool, Unicode, Integer, List, observe, default
+from traitlets import Bool, Unicode, Integer, List, observe
 from jupyterhub.spawner import Spawner
 
 
 class SSHSpawner(Spawner):
+    """Spawn Jupyter single-user servers on remote hosts via SSH."""
 
     remote_hosts = List(trait=Unicode(),
             help="Possible remote hosts from which to choose remote_host.",
@@ -228,7 +229,7 @@ class SSHSpawner(Spawner):
 
     async def stop(self, now=False):
         """Stop single-user server process for the current user."""
-        alive = await self.remote_signal(15)
+        await self.remote_signal(15)
         self.clear_state()
 
     def get_remote_user(self, username):
@@ -236,11 +237,8 @@ class SSHSpawner(Spawner):
         return username
 
     def choose_remote_host(self):
-        """
-        Given the list of possible nodes from which to choose, make the choice of which should be the remote host.
-        """
-        remote_host = random.choice(self.remote_hosts)
-        return remote_host
+        """Choose a remote host from ``remote_hosts``."""
+        return random.choice(self.remote_hosts)
 
     @observe('remote_host')
     def _log_remote_host(self, change):
@@ -267,12 +265,12 @@ class SSHSpawner(Spawner):
         stderr = result.stderr
         retcode = result.exit_status
 
-        if stdout != b"" and stdout.strip():
+        if stdout and stdout.strip():
             try:
                 ip, port = stdout.strip().split()
                 port = int(port)
                 self.log.debug("ip={} port={}".format(ip, port))
-                return (ip.encode().decode(), port)
+                return (ip, port)
             except (ValueError, IndexError) as e:
                 self.log.error(f"Failed to parse port output: {stdout}. Error: {e}")
                 return (None, None)
@@ -316,14 +314,7 @@ class SSHSpawner(Spawner):
         bash_script_str += '%s < /dev/null >> .jupyter.log 2>&1 & pid=$!\n' % command
         bash_script_str += 'echo $pid\n'
 
-        run_script = "/tmp/{}_run.sh".format(self.user.name)
-        with open(run_script, "w") as f:
-            f.write(bash_script_str)
-        if not os.path.isfile(run_script):
-            raise Exception("The file " + run_script + "was not created.")
-        else:
-            with open(run_script, "r") as f:
-                self.log.debug(run_script + " was written as:\n" + f.read())
+        self.log.debug("run script was written as:\n%s", bash_script_str)
 
         async with asyncssh.connect(
                 self.remote_ip,
@@ -331,13 +322,13 @@ class SSHSpawner(Spawner):
                 password=password,
                 **self._ssh_connect_kwargs(self.remote_ip),
         ) as conn:
-            result = await conn.run("bash -s", stdin=run_script)
+            result = await conn.run("bash -s", stdin=bash_script_str)
         stdout = result.stdout
         stderr = result.stderr
         retcode = result.exit_status
 
         self.log.debug("exec_notebook status={}".format(retcode))
-        if stdout != b'' and stdout.strip():
+        if stdout and stdout.strip():
             try:
                 pid = int(stdout.strip())
                 return pid
@@ -368,6 +359,20 @@ class SSHSpawner(Spawner):
         return (retcode == 0)
 
     def stage_certs(self, paths, dest):
+        """Move or copy cert files into a local staging directory.
+
+        Parameters
+        ----------
+        paths : dict
+            Mapping with ``keyfile``, ``certfile``, and ``cafile`` paths.
+        dest : str
+            Destination staging directory.
+
+        Returns
+        -------
+        dict
+            Mapping with remote cert file paths under ``self.resource_path``.
+        """
         shutil.move(paths['keyfile'], dest)
         shutil.move(paths['certfile'], dest)
         shutil.copy(paths['cafile'], dest)
@@ -387,12 +392,14 @@ class SSHSpawner(Spawner):
         }
 
     def _write_local_log(self, content):
+        """Write debug content to ``local_logfile`` when enabled."""
         if not self.local_logfile:
             return
         with open(self.local_logfile, "w") as fout:
             fout.write(content)
 
     def _ssh_connect_kwargs(self, host):
+        """Build ``asyncssh.connect`` kwargs based on host-key policy."""
         if not self.strict_host_key_checking:
             return {"known_hosts": None}
 
@@ -405,6 +412,7 @@ class SSHSpawner(Spawner):
         return {}
 
     def _is_loopback_host(self, host):
+        """Return ``True`` if *host* resolves to loopback/local identity."""
         if not host:
             return False
 

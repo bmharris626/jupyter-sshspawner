@@ -1,3 +1,5 @@
+"""Unit tests for sshspawner.spawner behavior."""
+
 import importlib
 import sys
 import types
@@ -10,6 +12,7 @@ SRC_DIR = REPO_ROOT / "src"
 
 
 def _install_test_stubs():
+    """Install lightweight stubs for optional runtime dependencies."""
     if str(SRC_DIR) not in sys.path:
         sys.path.insert(0, str(SRC_DIR))
 
@@ -87,6 +90,8 @@ def _install_test_stubs():
 
 
 class SSHSpawnerTests(unittest.IsolatedAsyncioTestCase):
+    """Behavioral tests for ``SSHSpawner`` helper and start logic."""
+
     @classmethod
     def setUpClass(cls):
         _install_test_stubs()
