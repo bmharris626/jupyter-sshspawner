@@ -1,6 +1,7 @@
 import os
-import pwd
-import shutil
+import shlex
+
+import asyncssh
 
 from jupyterhub.auth import DummyAuthenticator
 
@@ -21,16 +22,6 @@ SHARED_DATA = os.path.join(STORAGE_BASE, "shared-data")
 SHARED_GROUP = os.path.join(STORAGE_BASE, "shared-selected")
 
 
-def _safe_chown(path, username, log):
-    try:
-        user_info = pwd.getpwnam(username)
-        os.chown(path, user_info.pw_uid, user_info.pw_gid)
-    except KeyError:
-        log.warning("OS user %s does not exist; skipping chown for %s", username, path)
-    except PermissionError:
-        log.warning("No permission to chown %s; leaving ownership as-is", path)
-
-
 def _ensure_dir(path, mode):
     os.makedirs(path, exist_ok=True)
     os.chmod(path, mode)
@@ -45,29 +36,40 @@ async def bootstrap_user_storage(spawner):
     _ensure_dir(SHARED_DATA, 0o755)
     _ensure_dir(SHARED_GROUP, 0o770)
 
-    user_home = os.path.join(HOMES_BASE, username)
-    _ensure_dir(user_home, 0o750)
-    _safe_chown(user_home, username, spawner.log)
+    if not getattr(spawner, "remote_hosts", None):
+        raise RuntimeError("SSHSpawner.remote_hosts must be set")
 
-    for target, link_name in [
-        (SHARED_DOCS, "docs"),
-        (SHARED_DATA, "data"),
-        (SHARED_GROUP, "shared-selected"),
-    ]:
-        link_path = os.path.join(user_home, link_name)
-        if os.path.islink(link_path):
-            if os.readlink(link_path) == target:
-                continue
-            os.unlink(link_path)
-        elif os.path.exists(link_path):
-            backup = f"{link_path}.bak"
-            if os.path.exists(backup):
-                if os.path.isdir(backup) and not os.path.islink(backup):
-                    shutil.rmtree(backup)
-                else:
-                    os.unlink(backup)
-            os.rename(link_path, backup)
-        os.symlink(target, link_path)
+    remote_host = spawner.remote_hosts[0]
+    remote_port = int(getattr(spawner, "remote_port", "22"))
+    ssh_kwargs = {}
+    if hasattr(spawner, "_ssh_connect_kwargs"):
+        ssh_kwargs = spawner._ssh_connect_kwargs(remote_host)
+
+    remote_home = os.path.join(HOMES_BASE, username)
+    quoted_home = shlex.quote(remote_home)
+    quoted_docs = shlex.quote(SHARED_DOCS)
+    quoted_data = shlex.quote(SHARED_DATA)
+    quoted_group = shlex.quote(SHARED_GROUP)
+    quoted_docs_link = shlex.quote(os.path.join(remote_home, "docs"))
+    quoted_data_link = shlex.quote(os.path.join(remote_home, "data"))
+    quoted_group_link = shlex.quote(os.path.join(remote_home, "shared-selected"))
+
+    username, password = await spawner.get_auth_credentials()
+    remote_script = (
+        f"mkdir -p {quoted_home} && chmod 750 {quoted_home} && "
+        f"ln -sfn {quoted_docs} {quoted_docs_link} && "
+        f"ln -sfn {quoted_data} {quoted_data_link} && "
+        f"ln -sfn {quoted_group} {quoted_group_link}"
+    )
+
+    async with asyncssh.connect(
+        remote_host,
+        port=remote_port,
+        username=username,
+        password=password,
+        **ssh_kwargs,
+    ) as conn:
+        await conn.run(remote_script, check=True)
 
 
 c.JupyterHub.bind_url = "http://0.0.0.0:8000"
