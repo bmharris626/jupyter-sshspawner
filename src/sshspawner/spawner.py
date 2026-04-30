@@ -130,11 +130,12 @@ class SSHSpawner(Spawner):
 
         self.remote_host = self.choose_remote_host()
 
-        self.remote_ip, port = await self.remote_random_port()
+        remote_ip, port = await self.remote_random_port()
 
-        if self.remote_ip is None or port is None or port == 0:
+        if remote_ip is None or port is None or port == 0:
             return False
 
+        self.remote_ip = remote_ip
         self.port = port
 
         cmd = []
@@ -322,7 +323,7 @@ class SSHSpawner(Spawner):
                 password=password,
                 **self._ssh_connect_kwargs(self.remote_ip),
         ) as conn:
-            result = await conn.run("bash -s", stdin=bash_script_str)
+            result = await conn.run("bash -s", input=bash_script_str)
         stdout = result.stdout
         stderr = result.stderr
         retcode = result.exit_status

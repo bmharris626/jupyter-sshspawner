@@ -1,0 +1,91 @@
+import os
+import pwd
+import shutil
+
+from jupyterhub.auth import DummyAuthenticator
+
+
+class PasswordAuthDummyAuthenticator(DummyAuthenticator):
+    async def authenticate(self, handler, data):
+        username = data.get("username")
+        password = data.get("password", "")
+        if not username:
+            return None
+        return {"name": username, "auth_state": {"password": password}}
+
+
+STORAGE_BASE = "/tmp/jh-test/storage"
+HOMES_BASE = os.path.join(STORAGE_BASE, "homes")
+SHARED_DOCS = os.path.join(STORAGE_BASE, "shared-docs")
+SHARED_DATA = os.path.join(STORAGE_BASE, "shared-data")
+SHARED_GROUP = os.path.join(STORAGE_BASE, "shared-selected")
+
+
+def _safe_chown(path, username, log):
+    try:
+        user_info = pwd.getpwnam(username)
+        os.chown(path, user_info.pw_uid, user_info.pw_gid)
+    except KeyError:
+        log.warning("OS user %s does not exist; skipping chown for %s", username, path)
+    except PermissionError:
+        log.warning("No permission to chown %s; leaving ownership as-is", path)
+
+
+def _ensure_dir(path, mode):
+    os.makedirs(path, exist_ok=True)
+    os.chmod(path, mode)
+
+
+async def bootstrap_user_storage(spawner):
+    username = spawner.user.name
+
+    _ensure_dir(STORAGE_BASE, 0o755)
+    _ensure_dir(HOMES_BASE, 0o755)
+    _ensure_dir(SHARED_DOCS, 0o755)
+    _ensure_dir(SHARED_DATA, 0o755)
+    _ensure_dir(SHARED_GROUP, 0o770)
+
+    user_home = os.path.join(HOMES_BASE, username)
+    _ensure_dir(user_home, 0o750)
+    _safe_chown(user_home, username, spawner.log)
+
+    for target, link_name in [
+        (SHARED_DOCS, "docs"),
+        (SHARED_DATA, "data"),
+        (SHARED_GROUP, "shared-selected"),
+    ]:
+        link_path = os.path.join(user_home, link_name)
+        if os.path.islink(link_path):
+            if os.readlink(link_path) == target:
+                continue
+            os.unlink(link_path)
+        elif os.path.exists(link_path):
+            backup = f"{link_path}.bak"
+            if os.path.exists(backup):
+                if os.path.isdir(backup) and not os.path.islink(backup):
+                    shutil.rmtree(backup)
+                else:
+                    os.unlink(backup)
+            os.rename(link_path, backup)
+        os.symlink(target, link_path)
+
+
+c.JupyterHub.bind_url = "http://0.0.0.0:8000"
+c.ConfigurableHTTPProxy.command = ["/tmp/jh-test/node_modules/.bin/configurable-http-proxy"]
+c.JupyterHub.spawner_class = "sshspawner.SSHSpawner"
+
+c.JupyterHub.authenticator_class = PasswordAuthDummyAuthenticator
+c.Authenticator.enable_auth_state = True
+c.Authenticator.allow_all = True
+c.CryptKeeper.keys = ["4e4a54d2e8e7fd1be2f794f29eb6e0268b02f2bc0b0f9d4bd6aa6a0f6a4a9467"]
+
+c.SSHSpawner.remote_hosts = ["localhost"]
+c.SSHSpawner.remote_port = "22"
+c.SSHSpawner.remote_port_command = '/tmp/jh-test/.venv/bin/python -c "import socket; s=socket.socket(); s.bind((\'127.0.0.1\', 0)); ip, port = s.getsockname(); s.close(); print(f\'{ip} {port}\')"'
+c.SSHSpawner.strict_host_key_checking = True
+c.SSHSpawner.allow_loopback_no_host_key_checking = True
+c.SSHSpawner.path = "/tmp/jh-test/.venv/bin:/usr/local/bin:/usr/bin:/bin"
+
+c.Spawner.default_url = "/lab"
+c.Spawner.notebook_dir = "/tmp/jh-test/storage/homes/{username}"
+c.Spawner.pre_spawn_hook = bootstrap_user_storage

@@ -3,6 +3,7 @@
 import subprocess
 import sys
 import unittest
+import ipaddress
 from pathlib import Path
 
 
@@ -26,6 +27,8 @@ class GetPortTests(unittest.TestCase):
 
         ip, port = parts
         self.assertTrue(ip)
+        self.assertNotEqual(ip, "0.0.0.0")
+        ipaddress.ip_address(ip)
         self.assertGreater(int(port), 0)
         self.assertEqual(result.stderr, "")
 

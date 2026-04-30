@@ -175,6 +175,21 @@ class SSHSpawnerTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("--port=9999", captured["command"])
         self.assertNotIn("--ip=127.0.0.1", captured["command"])
 
+    async def test_start_handles_remote_port_failure_without_trait_error(self):
+        spawner = self._new_spawner()
+        spawner.remote_hosts = ["node1"]
+        spawner.choose_remote_host = lambda: "node1"
+        spawner.remote_ip = "remote_ip"
+
+        async def _failed_remote_random_port():
+            return (None, None)
+
+        spawner.remote_random_port = _failed_remote_random_port
+
+        result = await spawner.start()
+        self.assertFalse(result)
+        self.assertEqual(spawner.remote_ip, "remote_ip")
+
     async def test_ssh_known_hosts_policy(self):
         spawner = self._new_spawner()
 
