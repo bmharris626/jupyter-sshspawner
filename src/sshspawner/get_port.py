@@ -1,5 +1,6 @@
 """Return an ephemeral local IP/port pair for remote spawning."""
 
+import argparse
 import socket
 
 
@@ -18,9 +19,9 @@ def get_local_ip():
         probe.close()
 
 
-def get_free_port():
+def get_free_port(ip=None):
     """Reserve and return a free local socket bind tuple."""
-    ip = get_local_ip()
+    ip = ip or get_local_ip()
     s = socket.socket()
     s.bind((ip, 0))
     _, port = s.getsockname()
@@ -28,9 +29,21 @@ def get_free_port():
     return ip, port
 
 
+def parse_args(argv=None):
+    """Parse command line arguments."""
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--ip",
+        choices=("0.0.0.0", "localhost"),
+        help="IP address to print and use when reserving a free port.",
+    )
+    return parser.parse_args(argv)
+
+
 def main():
     """Print ``<ip> <port>`` for compatibility with SSHSpawner."""
-    ip, port = get_free_port()
+    args = parse_args()
+    ip, port = get_free_port(args.ip)
     print(f"{ip} {port}")
 
 

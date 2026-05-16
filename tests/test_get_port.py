@@ -32,6 +32,32 @@ class GetPortTests(unittest.TestCase):
         self.assertGreater(int(port), 0)
         self.assertEqual(result.stderr, "")
 
+    def test_wrapper_accepts_any_address_flag(self):
+        result = subprocess.run(
+            [sys.executable, str(REPO_ROOT / "get_port.py"), "--ip", "0.0.0.0"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+        ip, port = result.stdout.strip().split()
+        self.assertEqual(ip, "0.0.0.0")
+        self.assertGreater(int(port), 0)
+        self.assertEqual(result.stderr, "")
+
+    def test_wrapper_accepts_localhost_flag(self):
+        result = subprocess.run(
+            [sys.executable, str(REPO_ROOT / "get_port.py"), "--ip", "localhost"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+        ip, port = result.stdout.strip().split()
+        self.assertEqual(ip, "localhost")
+        self.assertGreater(int(port), 0)
+        self.assertEqual(result.stderr, "")
+
 
 if __name__ == "__main__":
     unittest.main()
