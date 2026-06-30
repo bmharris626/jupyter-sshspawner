@@ -171,22 +171,30 @@ class SSHSpawner(Spawner):
                         local_resource_path
                     )
 
-                async with asyncssh.connect(
-                        self.remote_ip,
-                        username=username,
-                        password=password,
-                        **self._ssh_connect_kwargs(self.remote_ip),
-                ) as conn:
-                    mkdir_cmd = "mkdir -p {path} 2>/dev/null".format(path=self.resource_path)
-                    result = await conn.run(mkdir_cmd)
-                files = [os.path.join(local_resource_path, f) for f in os.listdir(local_resource_path)]
-                async with asyncssh.connect(
-                        self.remote_ip,
-                        username=username,
-                        password=password,
-                        **self._ssh_connect_kwargs(self.remote_ip),
-                ) as conn:
-                    await asyncssh.scp(files, (conn, self.resource_path))
+                try:
+                    async with asyncssh.connect(
+                            self.remote_ip,
+                            username=username,
+                            password=password,
+                            **self._ssh_connect_kwargs(self.remote_ip),
+                    ) as conn:
+                        mkdir_cmd = "mkdir -p {path} 2>/dev/null".format(path=self.resource_path)
+                        result = await conn.run(mkdir_cmd)
+                    files = [os.path.join(local_resource_path, f) for f in os.listdir(local_resource_path)]
+                    async with asyncssh.connect(
+                            self.remote_ip,
+                            username=username,
+                            password=password,
+                            **self._ssh_connect_kwargs(self.remote_ip),
+                    ) as conn:
+                        await asyncssh.scp(files, (conn, self.resource_path))
+                except asyncssh.PermissionDenied:
+                    raise RuntimeError(
+                        f"SSH authentication failed for {username} on {self.remote_ip}. "
+                        "Check your password."
+                    )
+                except asyncssh.Error as e:
+                    raise RuntimeError(f"SSH connection error during cert staging on {self.remote_ip}: {e}")
 
         if self.hub_api_url != "":
             old = "--hub-api-url={}".format(self.hub.api_url)
@@ -230,7 +238,12 @@ class SSHSpawner(Spawner):
 
     async def stop(self, now=False):
         """Stop single-user server process for the current user."""
-        await self.remote_signal(15)
+        try:
+            await self.remote_signal(15)
+        except RuntimeError as e:
+            self.log.warning("Could not signal process during stop (credentials unavailable?): %s", e)
+        except asyncssh.Error as e:
+            self.log.warning("SSH error during stop for %s: %s", self.user.name, e)
         self.clear_state()
 
     def get_remote_user(self, username):
@@ -255,13 +268,21 @@ class SSHSpawner(Spawner):
         If this fails for some reason return `None`."""
 
         username, password = await self.get_auth_credentials()
-        async with asyncssh.connect(
-                self.remote_host,
-                username=username,
-                password=password,
-                **self._ssh_connect_kwargs(self.remote_host),
-        ) as conn:
-            result = await conn.run(self.remote_port_command)
+        try:
+            async with asyncssh.connect(
+                    self.remote_host,
+                    username=username,
+                    password=password,
+                    **self._ssh_connect_kwargs(self.remote_host),
+            ) as conn:
+                result = await conn.run(self.remote_port_command)
+        except asyncssh.PermissionDenied:
+            raise RuntimeError(
+                f"SSH authentication failed for {username} on {self.remote_host}. "
+                "Check your password."
+            )
+        except asyncssh.Error as e:
+            raise RuntimeError(f"SSH connection error on {self.remote_host}: {e}")
         stdout = result.stdout
         stderr = result.stderr
         retcode = result.exit_status
@@ -317,13 +338,21 @@ class SSHSpawner(Spawner):
 
         self.log.debug("run script was written as:\n%s", bash_script_str)
 
-        async with asyncssh.connect(
-                self.remote_ip,
-                username=username,
-                password=password,
-                **self._ssh_connect_kwargs(self.remote_ip),
-        ) as conn:
-            result = await conn.run("bash -s", input=bash_script_str)
+        try:
+            async with asyncssh.connect(
+                    self.remote_ip,
+                    username=username,
+                    password=password,
+                    **self._ssh_connect_kwargs(self.remote_ip),
+            ) as conn:
+                result = await conn.run("bash -s", input=bash_script_str)
+        except asyncssh.PermissionDenied:
+            raise RuntimeError(
+                f"SSH authentication failed for {username} on {self.remote_ip}. "
+                "Check your password."
+            )
+        except asyncssh.Error as e:
+            raise RuntimeError(f"SSH connection error on {self.remote_ip}: {e}")
         stdout = result.stdout
         stderr = result.stderr
         retcode = result.exit_status
@@ -346,13 +375,20 @@ class SSHSpawner(Spawner):
         username, password = await self.get_auth_credentials()
         command = "kill -s %s %d < /dev/null"  % (sig, self.pid)
 
-        async with asyncssh.connect(
-                self.remote_ip,
-                username=username,
-                password=password,
-                **self._ssh_connect_kwargs(self.remote_ip),
-        ) as conn:
-            result = await conn.run(command)
+        try:
+            async with asyncssh.connect(
+                    self.remote_ip,
+                    username=username,
+                    password=password,
+                    **self._ssh_connect_kwargs(self.remote_ip),
+            ) as conn:
+                result = await conn.run(command)
+        except asyncssh.PermissionDenied:
+            self.log.error("SSH authentication failed sending signal %s to %s", sig, self.remote_ip)
+            return False
+        except asyncssh.Error as e:
+            self.log.error("SSH error sending signal %s to %s: %s", sig, self.remote_ip, e)
+            return False
         stdout = result.stdout
         stderr = result.stderr
         retcode = result.exit_status
