@@ -91,3 +91,5 @@ c.SSHSpawner.path = "/tmp/jh-test/.venv/bin:/usr/local/bin:/usr/bin:/bin"
 c.Spawner.default_url = "/lab"
 c.Spawner.notebook_dir = "/tmp/jh-test/storage/homes/{username}"
 c.Spawner.pre_spawn_hook = bootstrap_user_storage
+
+c.JupyterHub.shutdown_no_activity_timeout = 1800  # shut down idle servers after 30 minutes
